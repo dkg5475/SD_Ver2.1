@@ -9,12 +9,16 @@
 #include <stdbool.h>
 #include <string.h>
 
+#define READ_TIMEOUT_MS 1000
 
 ARM_DRIVER_USART USART0; // instance of ARM_DRIVER_USART from Driver_USART.h
 ARM_DRIVER_USART *driver0 = &USART0; // pointer to the instance
 
-bool buffer_ready = false;
-bool rx_timeout = false;
+volatile bool buffer_ready;
+volatile bool rx_timeout;
+
+uint8_t txBuffer[128] = {0};
+uint8_t rxBuffer[128] = {0};
 
 volatile uint32_t tickCount = 0; // Global tick counter
 
@@ -41,10 +45,14 @@ void Delay_ms(uint32_t ms) {
     while ((tickCount - start) < ms);
 }
 
+
 void USART_Read_Callback(uint32_t event) {
   uint32_t mask;
  
-  mask = ARM_USART_EVENT_RECEIVE_COMPLETE;
+  mask = ARM_USART_EVENT_RECEIVE_COMPLETE  | 
+				 ARM_USART_EVENT_TRANSFER_COMPLETE |
+         ARM_USART_EVENT_SEND_COMPLETE     |
+         ARM_USART_EVENT_TX_COMPLETE;
 	
 	if (event & mask) {
 		buffer_ready = true;
@@ -54,6 +62,7 @@ void USART_Read_Callback(uint32_t event) {
 		rx_timeout = true;
 	}
 }
+
 
 
 void USART0_Initialize(void) {
@@ -82,19 +91,68 @@ void USART0_Initialize(void) {
 	
 }
 
+typedef enum {
+    READ_IDLE,
+    READ_IN_PROGRESS,
+    READ_COMPLETE,
+    READ_TIMEOUT
+} read_state_t;
+
+read_state_t usart_read_state = READ_IDLE;
+uint32_t read_start_time;
+
+int32_t USART0_Read_NonBlocking(void) {
+	int32_t status = 0;
+	
+	switch(usart_read_state) {
+        
+				case READ_IDLE:
+            // Start new read
+            status = driver0->Receive(rxBuffer, sizeof(rxBuffer)/sizeof(rxBuffer[0]));
+            if (status == ARM_DRIVER_OK) {
+                usart_read_state = READ_IN_PROGRESS;
+                read_start_time = tickCount;
+            }
+            return status;
+            
+        case READ_IN_PROGRESS:
+            if (buffer_ready) {
+                usart_read_state = READ_IDLE;
+                return driver0->GetRxCount();
+            }
+            else if ((tickCount - read_start_time) > READ_TIMEOUT_MS) {
+                usart_read_state = READ_IDLE;
+                driver0->Control(ARM_USART_ABORT_RECEIVE, 0);
+                return ARM_DRIVER_ERROR_TIMEOUT;
+            }
+            return ARM_DRIVER_ERROR_BUSY;  // Still waiting
+            
+        default:
+            usart_read_state = READ_IDLE;
+            return ARM_DRIVER_ERROR;
+    }
+}
+
+
+void USART0_Send (const void *data, uint32_t num) {
+	driver0->Send(data, num);
+}
+
+
+
 
 
 
 
 int main () {
-
 	SystemInit();
+	
 	
 	while(1) {
 			
-	}
-	
-	
+				
+  }
+
 	return (EXIT_FAILURE);
 	
 }
